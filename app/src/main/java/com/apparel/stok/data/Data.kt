@@ -14,6 +14,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** Bir ürün varyantı: örn. "Basic Tişört / M / Siyah" */
@@ -28,6 +30,8 @@ data class Product(
     val quantity: Int = 0,
     val minQuantity: Int = 0,
     val updatedAt: Long = System.currentTimeMillis(),
+    /** Uygulama içinde saklanan fotoğrafın dosya yolu */
+    val imagePath: String? = null,
 ) {
     val isLow: Boolean get() = quantity <= minQuantity
 }
@@ -89,11 +93,17 @@ interface StockDao {
     }
 }
 
-@Database(entities = [Product::class, Movement::class], version = 1, exportSchema = false)
+@Database(entities = [Product::class, Movement::class], version = 2, exportSchema = false)
 abstract class StockDatabase : RoomDatabase() {
     abstract fun dao(): StockDao
 
     companion object {
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE products ADD COLUMN imagePath TEXT")
+            }
+        }
+
         @Volatile private var instance: StockDatabase? = null
 
         fun get(context: Context): StockDatabase =
@@ -102,7 +112,7 @@ abstract class StockDatabase : RoomDatabase() {
                     context.applicationContext,
                     StockDatabase::class.java,
                     "stok.db",
-                ).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
             }
     }
 }

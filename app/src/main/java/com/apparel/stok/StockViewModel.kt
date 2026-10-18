@@ -40,7 +40,10 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
         else dao.update(product.copy(updatedAt = System.currentTimeMillis()))
     }
 
-    fun delete(product: Product) = viewModelScope.launch { dao.delete(product) }
+    fun delete(product: Product) = viewModelScope.launch {
+        dao.delete(product)
+        ImageStore.delete(product.imagePath)
+    }
 
     /** Stok eksiye düşecekse false döner. */
     fun changeStock(product: Product, delta: Int, note: String): Boolean {

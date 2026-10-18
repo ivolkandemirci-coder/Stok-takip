@@ -6,6 +6,25 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.window.Dialog
+import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
+import java.io.File
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -197,6 +216,8 @@ private fun ProductCard(p: Product, onClick: () -> Unit, onMinus: () -> Unit, on
         else CardDefaults.cardColors(),
     ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            ProductThumb(p.imagePath, p.name, 56.dp)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(p.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val details = listOf(p.sku, p.size, p.color).filter { it.isNotBlank() }.joinToString(" · ")
@@ -224,6 +245,39 @@ private fun ProductCard(p: Product, onClick: () -> Unit, onMinus: () -> Unit, on
     }
 }
 
+/** Küçük ürün görseli; fotoğraf yoksa ürün adının baş harfi. */
+@Composable
+private fun ProductThumb(path: String?, name: String, size: Dp, onClick: (() -> Unit)? = null) {
+    val shape = RoundedCornerShape(10.dp)
+    val mod = Modifier.size(size).clip(shape)
+        .background(MaterialTheme.colorScheme.surfaceVariant)
+        .let { if (onClick != null) it.clickable(onClick = onClick) else it }
+    if (path != null) {
+        AsyncImage(model = File(path), contentDescription = name, contentScale = ContentScale.Crop, modifier = mod)
+    } else {
+        Box(mod, contentAlignment = Alignment.Center) {
+            Text(
+                name.trim().take(1).uppercase(),
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Fotoğrafı tam ekran gösterir; dokununca kapanır. */
+@Composable
+private fun PhotoViewer(path: String, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        AsyncImage(
+            model = File(path),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onDismiss),
+        )
+    }
+}
+
 @Composable
 private fun ProductDialog(initial: Product?, onDismiss: () -> Unit, onSave: (Product) -> Unit) {
     var name by rememberSaveable { mutableStateOf(initial?.name ?: "") }
@@ -233,15 +287,69 @@ private fun ProductDialog(initial: Product?, onDismiss: () -> Unit, onSave: (Pro
     var color by rememberSaveable { mutableStateOf(initial?.color ?: "") }
     var qty by rememberSaveable { mutableStateOf(initial?.quantity?.toString() ?: "0") }
     var minQty by rememberSaveable { mutableStateOf(initial?.minQuantity?.toString() ?: "5") }
+    var imagePath by rememberSaveable { mutableStateOf(initial?.imagePath) }
+    var loadingImage by remember { mutableStateOf(false) }
+    var imageError by remember { mutableStateOf(false) }
+
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val cameraUri = remember { ImageStore.cameraUri(ctx) }
+    val importImage: (android.net.Uri) -> Unit = { uri ->
+        loadingImage = true
+        imageError = false
+        scope.launch {
+            val saved = ImageStore.import(ctx, uri)
+            if (saved != null) {
+                // Bu pencerede daha önce eklenen (henüz kaydedilmemiş) fotoğrafı temizle
+                if (imagePath != initial?.imagePath) ImageStore.delete(imagePath)
+                imagePath = saved
+            } else imageError = true
+            loadingImage = false
+        }
+    }
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) importImage(cameraUri)
+    }
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) importImage(uri)
+    }
+    val cancel = {
+        if (imagePath != initial?.imagePath) ImageStore.delete(imagePath)
+        onDismiss()
+    }
+
     val isNew = initial == null
     val valid = name.isNotBlank() && (qty.toIntOrNull() ?: -1) >= 0 && (minQty.toIntOrNull() ?: -1) >= 0
     val number = KeyboardOptions(keyboardType = KeyboardType.Number)
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = cancel,
         title = { Text(if (isNew) "Yeni ürün" else "Ürünü düzenle") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(contentAlignment = Alignment.Center) {
+                        ProductThumb(imagePath, name.ifBlank { "?" }, 96.dp)
+                        if (loadingImage) CircularProgressIndicator(Modifier.size(32.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedButton(onClick = { takePicture.launch(cameraUri) }, enabled = !loadingImage) {
+                            Text("Fotoğraf çek")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                            enabled = !loadingImage,
+                        ) { Text("Galeriden seç") }
+                        if (imagePath != null) TextButton(onClick = {
+                            if (imagePath != initial?.imagePath) ImageStore.delete(imagePath)
+                            imagePath = null
+                        }) { Text("Fotoğrafı kaldır", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+                if (imageError) Text("Fotoğraf eklenemedi, tekrar deneyin.", color = MaterialTheme.colorScheme.error)
                 OutlinedTextField(name, { name = it }, label = { Text("Ürün adı *") }, singleLine = true)
                 OutlinedTextField(sku, { sku = it }, label = { Text("SKU / Model kodu") }, singleLine = true)
                 OutlinedTextField(category, { category = it }, label = { Text("Kategori (tişört, pantolon…)") }, singleLine = true)
@@ -261,19 +369,22 @@ private fun ProductDialog(initial: Product?, onDismiss: () -> Unit, onSave: (Pro
             }
         },
         confirmButton = {
-            TextButton(enabled = valid, onClick = {
+            TextButton(enabled = valid && !loadingImage, onClick = {
                 val base = initial ?: Product(name = "")
+                // Fotoğraf değiştiyse ya da kaldırıldıysa eskisini sil
+                if (initial?.imagePath != imagePath) ImageStore.delete(initial?.imagePath)
                 onSave(
                     base.copy(
                         name = name.trim(), sku = sku.trim(), category = category.trim(),
                         size = size.trim(), color = color.trim(),
                         quantity = if (isNew) qty.toInt() else base.quantity,
                         minQuantity = minQty.toInt(),
+                        imagePath = imagePath,
                     )
                 )
             }) { Text("Kaydet") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Vazgeç") } },
+        dismissButton = { TextButton(onClick = cancel) { Text("Vazgeç") } },
     )
 }
 
@@ -290,6 +401,11 @@ private fun StockDialog(
     var note by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var showPhoto by remember { mutableStateOf(false) }
+
+    if (showPhoto && p.imagePath != null) {
+        PhotoViewer(p.imagePath) { showPhoto = false }
+    }
     val history by remember(p.id) { vm.movements(p.id) }.collectAsStateWithLifecycle(emptyList())
     val fmt = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.forLanguageTag("tr")) }
 
@@ -317,6 +433,16 @@ private fun StockDialog(
         },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (p.imagePath != null) {
+                    AsyncImage(
+                        model = File(p.imagePath),
+                        contentDescription = p.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().height(200.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { showPhoto = true },
+                    )
+                }
                 Text("Mevcut stok: ${p.quantity}", style = MaterialTheme.typography.titleMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = isIn, onClick = { isIn = true }, label = { Text("Giriş (+)") })
